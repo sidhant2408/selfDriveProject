@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cone-navigation"
+version = "0.1.0"
+description = "Ground-truth-first cone-aware local planning and MPC in CARLA"
+requires-python = ">=3.10"
+# NOTE: the `carla` client is deliberately NOT listed. It must be installed from
+# the wheel that matches the running server (CARLA 1.0 here), never from PyPI.
+dependencies = [
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "pyyaml>=6.0",
+    "shapely>=2.0",
+    "casadi>=3.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

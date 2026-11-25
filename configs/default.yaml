@@ -1,0 +1,95 @@
+# Exploratory defaults. NOT road-safety-certified values.
+simulation:
+  host: 127.0.0.1
+  port: 2000
+  timeout_s: 30.0                # RPC timeout (connect, load_world, spawn)
+  tick_timeout_s: 10.0           # per world.tick(); one diagnosed retry on timeout
+  fixed_delta_seconds: 0.05      # 20 Hz physics / control tick
+  seed: 42
+  max_episode_seconds: 40
+  no_rendering_mode: false
+  require_version_match: true    # client libcarla must equal server libcarla
+
+# Measured on CARLA 1.0 (Town10HD_Opt, 2026-11-23) from the actor bounding box and
+# VehiclePhysicsControl.wheels (wheel locations are in world METERS in this build).
+vehicle:
+  blueprint: vehicle.tesla.model3
+  length_m: 4.694                # 2 * bbox.extent.x
+  width_m: 2.088                 # 2 * bbox.extent.y (includes mirrors -> conservative)
+  wheelbase_m: 2.875             # front axle x - rear axle x
+  bbox_center_offset_x_m: -0.0685 # bbox centre relative to actor origin, body-forward
+  max_wheel_steer_deg: 35.0      # wheels[0].max_steer_angle
+  # Sign of map-frame yaw rate produced by a POSITIVE carla.VehicleControl.steer.
+  # Measured: steer=+0.3 increases CARLA yaw (clockwise from above) => turns RIGHT,
+  # i.e. negative yaw rate in the right-handed map frame.
+  steer_sign_map: -1
+  target_speed_mps: 3.0
+  desired_max_steering_rad: 0.45
+
+  # Rear axle is this far behind the actor origin (wheel x: front -22.89,
+  # rear -25.77, origin -24.34). The MPC's kinematic bicycle uses the rear axle.
+  rear_axle_offset_m: 1.44
+
+planner:
+  update_every_n_ticks: 4          # 5 Hz replanning at 20 Hz physics
+  horizon_m: 45.0
+  sample_spacing_m: 0.5            # swept-footprint check spacing along s
+  lateral_step_m: 0.15             # candidate target-offset grid
+  transition_lengths_m: [12.0, 18.0, 25.0]
+  transition_delays_m: [0.0, 4.0, 8.0]
+  return_gap_m: 3.0                # extra distance after the last cone before returning
+  base_clearance_m: 0.40           # cone footprint inflation (fixed margin)
+  vehicle_buffer_m: 0.05           # added around the ego bounding box
+  stop_buffer_m: 1.5               # stop this far (ego centre) before the first conflict
+  max_curvature_1pm: 0.10          # ~ tan(0.29 rad)/L
+  max_lat_accel_mps2: 1.0
+  plan_decel_mps2: 1.5             # comfortable stopping deceleration for the profile
+  max_decel_mps2: 3.0
+  d_home_m: 0.0                    # preferred lateral offset (ego-lane centre)
+  w_deviation: 1.0
+  w_curvature: 20.0
+  w_change: 0.1                    # small hysteresis vs previous target offset
+  w_consistency: 5.0               # stay close to the previously committed path
+  switch_margin: 0.3               # keep the committed path unless another is this much cheaper
+  min_progress_m: 0.50
+
+mpc:
+  horizon_steps: 20
+  dt: 0.10                         # control every 2 physics ticks (zero-order hold)
+  max_accel_mps2: 1.5
+  max_brake_mps2: 3.0
+  max_speed_mps: 4.0
+  max_steer_rad: 0.45              # <= calibrated effective max (0.77 * 35 deg = 0.47 rad)
+  max_steer_rate_rps: 0.6
+  w_pos: 2.0
+  w_yaw: 2.0
+  w_v: 1.0
+  w_accel: 0.1
+  w_steer: 0.5
+  w_daccel: 0.5
+  w_dsteer: 10.0
+  w_terminal: 5.0
+  ipopt_max_iter: 100
+
+# Measured with scripts/calibrate_actuators.py on CARLA 1.0, vehicle.tesla.model3,
+# Town10HD_Opt, 0.3-4.5 m/s, dt 0.05 (2026-11-23). Valid for low speed only.
+actuation:
+  throttle_table: {throttle: [0.0, 0.2, 0.3, 0.4, 0.5, 0.6], accel_mps2: [-0.18, 0.29, 0.64, 1.13, 1.78, 2.57]}
+  brake_table: {brake: [0.0, 0.1, 0.2, 0.3, 0.5], decel_mps2: [0.0, 1.13, 2.27, 3.42, 5.75]}   # beyond coasting
+  coast_accel_mps2: -0.18
+  max_throttle: 0.6
+  steer_gain: 0.77                 # effective wheel angle = gain * steer * max_wheel_steer
+  max_steer_change_per_tick: 0.05  # normalised steer units per 0.05 s tick
+  speed_feedback_gain: 0.8         # a_cmd += k * (v_mpc_next - v_measured)
+  standstill_brake: 0.4            # hold brake when the target speed is ~0 and nearly stopped
+
+uncertainty:
+  provider: ground_truth
+  position_sigma_m: 0.0
+  margin_mode: fixed
+  fixed_margin_m: 0.40
+  adaptive_base_m: 0.30
+  adaptive_k: 2.0
+
+smoke_test:
+  duration_s: 10.0

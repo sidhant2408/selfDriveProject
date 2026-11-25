@@ -1,0 +1,52 @@
+# Scenario B: tapered diversion.
+#
+# A diagonal taper of cones closes the ego lane over s = 20..35 (d: -1.5 -> +1.5),
+# then a straight line of cones along the lane line (d = +1.6) keeps it closed
+# until s = 50. Traffic must shift LEFT into the same-direction lane, which this
+# scenario explicitly PERMITS from s = 10 onwards. After s = 50 the ego lane is
+# open again, so returning is allowed (goal spans both lanes).
+# Road frame: s along ego-lane centre, d positive to the LEFT.
+name: tapered_diversion_B
+description: >
+  Six-cone diagonal taper closes the ego lane, followed by four cones along the
+  lane line. The adjacent same-direction lane (lane -1 at the anchor) is a
+  permitted corridor from s = 10 m.
+map: Town10HD_Opt
+seed: 42
+
+# Evaluation-only label. Pipeline modules must NEVER read this field.
+ground_truth_label: DIVERSION
+
+route:
+  anchor: {x: -24.34, y: -57.79}
+  expected_road_id: 7
+  expected_lane_id: -2
+  length_m: 85.0
+  sample_spacing_m: 1.0
+
+ego: {s: 0.0, d: 0.0, spawn_z_offset_m: 0.3}
+
+goal: {s_min: 70.0, s_max: 80.0, d_min: -1.75, d_max: 5.25}
+
+corridors:
+  - {name: ego_lane,          s_start: 0.0,  s_end: 85.0, d_min: -1.75, d_max: 1.75}
+  - {name: left_lane_detour,  s_start: 10.0, s_end: 85.0, d_min: 1.75,  d_max: 5.25}
+
+cone_defaults:
+  blueprint: static.prop.constructioncone
+  upright: {length: 0.48, width: 0.48}
+  fallen:  {length: 0.72, width: 0.48}
+
+cones:
+  # taper: 3 m spacing, +0.6 m lateral per cone
+  - {id: b0, s: 20.0, d: -1.5, state: upright}
+  - {id: b1, s: 23.0, d: -0.9, state: upright}
+  - {id: b2, s: 26.0, d: -0.3, state: upright}
+  - {id: b3, s: 29.0, d:  0.3, state: upright}
+  - {id: b4, s: 32.0, d:  0.9, state: upright}
+  - {id: b5, s: 35.0, d:  1.5, state: upright}
+  # run along the lane line
+  - {id: b6, s: 38.0, d:  1.6, state: upright}
+  - {id: b7, s: 42.0, d:  1.6, state: upright}
+  - {id: b8, s: 46.0, d:  1.6, state: upright}
+  - {id: b9, s: 50.0, d:  1.6, state: upright}

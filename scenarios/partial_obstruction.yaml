@@ -1,0 +1,59 @@
+# Scenario A: partial lane obstruction.
+#
+# Geometry is given in the ROAD frame (s, d):
+#   s = metres along the reference line (ego lane centre, travel direction),
+#   d = lateral metres, POSITIVE TO THE LEFT of the travel direction.
+# The loader converts (s, d) -> map frame -> CARLA world for spawning and records
+# the exact spawned CARLA transforms in the output registry.
+name: partial_obstruction_A
+description: >
+  Five upright construction cones along the right edge of the ego lane leave a
+  ~2.46 m free width (after a 0.40 m margin) inside the ego lane. A 2.09 m wide
+  car can pass without leaving the lane.
+map: Town10HD_Opt
+seed: 42
+
+# Evaluation-only label. Pipeline modules must NEVER read this field.
+ground_truth_label: PARTIAL
+
+route:
+  anchor:                 # CARLA world coordinates (left-handed), snapped to lane
+    x: -24.34
+    y: -57.79
+  expected_road_id: 7     # validated against the map; mismatch is an error
+  expected_lane_id: -2
+  length_m: 85.0          # 91 m of straight, junction-free lane exist here
+  sample_spacing_m: 1.0
+
+ego:
+  s: 0.0
+  d: 0.0
+  spawn_z_offset_m: 0.3   # drop height above road surface
+
+goal:                     # success region in the road frame
+  s_min: 70.0
+  s_max: 80.0
+  d_min: -1.75
+  d_max: 1.75
+
+# Permitted corridors (legality), separate from physical free space.
+# Here only the ego lane is permitted; the left lane (lane -1) is NOT.
+corridors:
+  - name: ego_lane
+    s_start: 0.0
+    s_end: 85.0
+    d_min: -1.75
+    d_max: 1.75
+
+cone_defaults:
+  blueprint: static.prop.constructioncone
+  # Footprints from the measured CARLA bbox (radius 0.239 m, height 0.712 m).
+  upright: {length: 0.48, width: 0.48}
+  fallen:  {length: 0.72, width: 0.48}   # length = cone height, along yaw
+
+cones:
+  - {id: c1, s: 25.0, d: -1.35, state: upright}
+  - {id: c2, s: 27.0, d: -1.35, state: upright}
+  - {id: c3, s: 29.0, d: -1.35, state: upright}
+  - {id: c4, s: 31.0, d: -1.35, state: upright}
+  - {id: c5, s: 33.0, d: -1.35, state: upright}

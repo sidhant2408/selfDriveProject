@@ -1,0 +1,26 @@
+# Baseline: unobstructed lane. Used to verify plain centre-line tracking by the
+# MPC (Phase 4 first step) and for actuator calibration.
+name: empty_lane
+description: No cones. The ego should follow the lane centre to the goal.
+map: Town10HD_Opt
+seed: 42
+ground_truth_label: null
+
+route:
+  anchor: {x: -24.34, y: -57.79}
+  expected_road_id: 7
+  expected_lane_id: -2
+  length_m: 85.0
+  sample_spacing_m: 1.0
+
+ego: {s: 0.0, d: 0.0, spawn_z_offset_m: 0.3}
+
+goal: {s_min: 70.0, s_max: 80.0, d_min: -1.75, d_max: 1.75}
+
+corridors:
+  - {name: ego_lane, s_start: 0.0, s_end: 85.0, d_min: -1.75, d_max: 1.75}
+
+cone_defaults:
+  blueprint: static.prop.constructioncone
+
+cones: []
