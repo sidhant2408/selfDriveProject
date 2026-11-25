@@ -7,32 +7,132 @@ Windows 11, Python 3.15.2, CasADi 3.8.2 / IPOPT.
 - **Phase 2 is not built yet.** There is no PARTIAL/DIVERSION/CLOSURE classifier. The planner decides pass versus stop purely from geometry: does a collision-free path exist inside the permitted corridors?
 - **Phase 5 is not built yet** (noise and adaptive margins).
 
-## System diagram and data flow
+## How it fits together
 
-```
- scenarios/*.yaml ──load+validate──► Scenario (road frame s,d; corridors; goal)
-                                          │
- CARLA map ──build_road_geometry──► RoadGeometry (ref. line in MAP frame, lanes)
-                                          │ resolve (s,d) -> map -> CARLA
-                                          ▼
-              carla_world.spawn_* ──► CARLA actors (ego + cone props)
-                                          │ registry kept at spawn time
-                                          ▼
-   GROUND TRUTH ENTERS HERE ──► GroundTruthConeProvider.get_cones() ─► [ConeObservation] (map frame)
-                                          │
-   (Phase 5) NoiseAdapter wraps the provider, same signature
-   (Phase 6) camera/LiDAR fusion implements the same signature
-                                          ▼
-   Phase 2  pattern_detector.classify(observations, corridors) -> PatternResult
-   Phase 3  planner.plan(ego_state, pattern, observations, road) -> [ReferencePoint]
-   Phase 4  mpc.solve(ego_state, reference) -> (a, delta)   ◄── MPC ATTACHES HERE
-            carla_control.to_carla(a, delta) -> VehicleControl ─► ego.apply_control
-                                          │
-   loop:  apply_control(u_k) -> world.tick() -> snapshot of new frame -> EgoState
+### Phases
+
+```mermaid
+flowchart LR
+    P0["Phase 0<br/>Sanity check"]:::done --> P1["Phase 1<br/>Cone scenarios"]:::done
+    P1 --> P2["Phase 2<br/>Scene classifier"]:::todo
+    P1 --> P3["Phase 3<br/>Local planner + safe stop"]:::done
+    P3 --> P4["Phase 4<br/>MPC control"]:::done
+    P2 -.-> P3
+    P4 --> P5["Phase 5<br/>Noise + adaptive margins"]:::todo
+    P5 --> P6["Phase 6<br/>Perception"]:::future
+
+    classDef done fill:#d3f0dc,stroke:#1f7a4d,color:#0b3d24
+    classDef todo fill:#fbf0d9,stroke:#9a6200,color:#4a3000
+    classDef future fill:#eceff3,stroke:#8794a4,color:#3a4552,stroke-dasharray:4 3
 ```
 
-Only `carla_*.py` import `carla`. Everything downstream of the provider works on
-dataclasses, so all of it is testable without the simulator.
+Green: built and verified in CARLA. Amber: not built yet. Grey: future work. Phases 3 and 4 were built before Phase 2, so the planner currently decides pass or stop from geometry alone.
+
+### System architecture
+
+```mermaid
+flowchart TB
+    subgraph setup["Episode setup (once)"]
+        YAML["scenarios/*.yaml"] -->|"load + validate"| SCN["Scenario<br/>cones in road frame (s, d)<br/>corridors, goal, label"]
+        MAP["CARLA map (Town10HD)"] -->|"build_road_geometry"| ROAD["RoadGeometry<br/>reference line + lanes (map frame)"]
+        SCN --> SPAWN["carla_world.spawn_ego / spawn_cones<br/>(s, d) → map → CARLA"]
+        ROAD --> SPAWN
+        SPAWN --> ACTORS[("CARLA actors<br/>ego car + cone props")]
+    end
+
+    subgraph loop["Closed loop (every tick, 20 Hz)"]
+        GT["GroundTruthConeProvider<br/>get_cones()"] --> OBS["ConeObservation list<br/>(map frame)"]
+        OBS --> PLAN["LocalPlanner.plan<br/>(Phase 3, 5 Hz)"]
+        EGO["EgoState<br/>x, y, yaw, speed"] --> PLAN
+        PLAN -->|"PASS path or STOP profile"| REF["build_reference<br/>N+1 points along the path"]
+        REF --> MPC["KinematicMPC.solve<br/>(Phase 4, 10 Hz, CasADi/IPOPT)"]
+        EGO --> MPC
+        MPC -->|"accel a, wheel angle δ"| ACT["ActuatorMapper<br/>measured throttle/brake/steer tables"]
+        ACT -->|"VehicleControl"| PLANT["CarlaPlant<br/>apply_control → world.tick"]
+        PLANT -->|"world snapshot"| EGO
+    end
+
+    ACTORS -.->|"registry kept at spawn"| GT
+    SCN -.->|"corridors"| PLAN
+    ROAD -.-> PLAN
+    PLANT --> MET["EpisodeMetrics<br/>true clearance, lane violation,<br/>MPC stats → outputs/"]
+
+    N5["Phase 5: NoiseAdapter<br/>(same signature)"]:::todo -.->|"wraps"| GT
+    N6["Phase 6: camera/LiDAR<br/>(same signature)"]:::future -.->|"replaces"| GT
+
+    classDef todo fill:#fbf0d9,stroke:#9a6200,color:#4a3000
+    classDef future fill:#eceff3,stroke:#8794a4,color:#3a4552,stroke-dasharray:4 3
+```
+
+Only `carla_*.py` import `carla`. Everything after the cone provider works on plain dataclasses, so it all runs without the simulator. `--offline` swaps `CarlaPlant` for `KinematicPlant`, a bicycle model with actuator lag, and nothing else changes.
+
+### One control loop, in time
+
+The simulator steps every 50 ms. The planner runs on every 4th tick and the MPC on every 2nd; between solves the last command is held.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant R as runner
+    participant P as LocalPlanner (5 Hz)
+    participant M as KinematicMPC (10 Hz)
+    participant A as ActuatorMapper
+    participant C as CARLA (sync, 20 Hz)
+
+    R->>C: read snapshot → EgoState, cones
+    alt every 4th tick
+        R->>P: plan(ego, cones, road, corridors)
+        P-->>R: Plan (PASS path or STOP profile)
+    end
+    alt every 2nd tick
+        R->>M: solve(ego, reference from plan)
+        M-->>R: a, δ  (on failure: full brake)
+    end
+    R->>A: to_command(a, δ, speed)
+    A-->>R: throttle, brake, steer (rate-limited)
+    R->>C: apply_control
+    R->>C: world.tick()  → next frame
+    R->>R: metrics.update, check GOAL / STOPPED / COLLISION / TIMEOUT
+```
+
+### How the planner decides
+
+```mermaid
+flowchart TD
+    START(["plan(ego, cones, road, corridors)"]) --> GEN["Generate candidates:<br/>target offset × transition length × start delay,<br/>with/without return to centre,<br/>+ 'continue previous path'"]
+    GEN --> CHECK{"For each candidate, sampled every 0.5 m:<br/>full car rectangle vs cones inflated by 0.40 m?<br/>every corner inside a permitted corridor?<br/>curvature ≤ limit?"}
+    CHECK -->|"no candidate passes"| STOP["STOP<br/>stop point = 1.5 m before first conflict<br/>v = √(2·a·(s_stop − s))"]
+    CHECK -->|"≥ 1 safe candidate"| COST["Score safe candidates:<br/>deviation from centre + curvature<br/>+ consistency with committed path"]
+    COST --> COMMIT{"'continue previous' safe and<br/>within 0.3 of the best score?"}
+    COMMIT -->|yes| KEEP["Keep committed path"]
+    COMMIT -->|no| BEST["Switch to best candidate"]
+    KEEP --> SPEED["Speed profile:<br/>target speed, capped by lateral accel<br/>and ability to stop at horizon end"]
+    BEST --> SPEED
+    SPEED --> PASS(["PASS plan"])
+    STOP --> OUT(["STOP plan"])
+```
+
+Being *permitted* to drive somewhere (corridors from the scenario) is checked separately from having *physical room* (cone geometry). Scenario labels such as CLOSURE are never read here; they are only used afterwards to score the outcome.
+
+### From MPC output to the car
+
+```mermaid
+flowchart LR
+    MPC["MPC solution<br/>a [m/s²], δ [rad]"] --> ACC["accel + speed-error feedback"]
+    MPC --> STR["steer = −δ / (0.77 × 35°)"]
+    ACC -->|"a > coast (−0.18)"| THR["throttle table<br/>0.2→+0.29 … 0.6→+2.57 m/s²"]
+    ACC -->|"a ≤ coast"| BRK["brake table<br/>0.1→−1.31 … 0.5→−5.93 m/s²"]
+    STR --> RATE["clip to ±1,<br/>≤ 0.05 change per tick"]
+    THR --> VC["carla.VehicleControl"]
+    BRK --> VC
+    RATE --> VC
+    VC --> HOLD{"car stopped and<br/>MPC wants to stay stopped?"}
+    HOLD -->|yes| HB["hold brake 0.4"]
+    HOLD -->|no| GO["apply_control"]
+    HB --> GO
+```
+
+The minus sign in the steer mapping exists because positive CARLA steer turns **right** (measured), while the planner and MPC use a left-positive frame.
 
 ## Frames (also in `src/cone_navigation/frames.py`)
 
